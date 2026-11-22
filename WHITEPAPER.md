@@ -72,7 +72,7 @@ We can apply that exact same compression trick to AI memory by combining a **2D 
 2. **1D Recipe Vectors (Lightweight Pointers):** Whenever a new experience happens, the agent doesn't save the whole grid. It saves a tiny **1D recipe vector** ($\mathbf{w}_i$) that acts like a shorthand formula pointing back to the Pattern Matrix:
 
    $$
-   \text{Memory}_i \approx 0.8 \times [\text{Pattern \#12}] + 0.3 \times [\text{Pattern \#47}]
+   \text{Memory}_i \approx 0.8 \times [\text{Pattern } 12] + 0.3 \times [\text{Pattern } 47]
    $$
 
    Because a 1D recipe vector is mostly zeros and references existing rows in the matrix, storage shrinks by **90% to 95%**, and searching becomes blazingly fast.
