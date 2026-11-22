@@ -70,7 +70,11 @@ We can apply that exact same compression trick to AI memory by combining a **2D 
 
 1. **The Pattern Matrix (The Shared Codebook):** Instead of saving similar experiences from scratch over and over, the AI extracts recurring templates—such as how you like emails formatted, standard debugging steps, or recurring project workflows—and stores each canonical pattern **once** as a row in a master **Pattern Matrix** ($\mathbf{C}$).
 2. **1D Recipe Vectors (Lightweight Pointers):** Whenever a new experience happens, the agent doesn't save the whole grid. It saves a tiny **1D recipe vector** ($\mathbf{w}_i$) that acts like a shorthand formula pointing back to the Pattern Matrix:
-   $$\text{Memory}_i \approx 0.8 \times [\text{Pattern \#12}] + 0.3 \times [\text{Pattern \#47}]$$
+
+   $$
+   \text{Memory}_i \approx 0.8 \times [\text{Pattern \#12}] + 0.3 \times [\text{Pattern \#47}]
+   $$
+
    Because a 1D recipe vector is mostly zeros and references existing rows in the matrix, storage shrinks by **90% to 95%**, and searching becomes blazingly fast.
 
 ### The "JPEG Blur" Catch and the Brain's Solution
