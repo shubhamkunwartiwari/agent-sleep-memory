@@ -75,7 +75,7 @@ We can apply that exact same compression trick to AI memory by combining a **2D 
    \text{Memory}_i \approx 0.8 \times [\text{Pattern } 12] + 0.3 \times [\text{Pattern } 47]
    $$
 
-   Because a 1D recipe vector is mostly zeros and references existing rows in the matrix, storage shrinks by **90% to 95%**, and searching becomes blazingly fast.
+Because a 1D recipe vector is mostly zeros and references existing rows in the matrix, storage shrinks by **90% to 95%**, and searching becomes blazingly fast.
 
 ### The "JPEG Blur" Catch and the Brain's Solution
 Zipping memories through a shared Pattern Matrix is **lossy compression**—much like saving a photo as a JPEG. It is brilliant at capturing the general picture and recognizing familiar routines, but it blurs out rare, one-off details (like a random Wi-Fi password, a confirmation code, or an unusual exception that does not match any pattern).
