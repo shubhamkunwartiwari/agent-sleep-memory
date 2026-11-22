@@ -92,7 +92,7 @@ Only `numpy` is required—no external API keys, vector databases, or paid model
 
 ```bash
 git clone [https://github.com/](https://github.com/)shubhamkunwartiwari/agent-sleep-memory.git
-cd <agent-sleep-memory>
+cd agent-sleep-memory
 pip install numpy
 python sleep_memory_sim.py
 ```
