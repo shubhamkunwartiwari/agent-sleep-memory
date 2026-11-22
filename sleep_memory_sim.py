@@ -1,7 +1,9 @@
 """
 Six-Layer Sleep-Consolidated Matrix Memory Simulation
 =====================================================
+
 A lightweight, dependency-minimal prototype demonstrating:
+
 1. Uncompressed Episodic Scratchpad (exact short-term recall)
 2. Pattern Matrix Codebook + Sparse 1D Recipe Vectors ("Memory Zip")
 3. Sparse Relational Graph (causal/conceptual links without O(N^2) bloat)
@@ -9,34 +11,48 @@ A lightweight, dependency-minimal prototype demonstrating:
 5. Sub-Millisecond Semantic Router (with confidence-threshold parallel fallback)
 6. Asynchronous Sleep Sub-Agent (Copy-on-Write Shadow Swapping + Stateless Privacy Sanitizer)
 
+Known simplifications (this is a demo, not a production system):
+- Embeddings are keyword flags over a fixed concept list, not learned embeddings.
+  The vectors passed to RawMemory in __main__ are hand-assigned.
+- The privacy sanitizer is a block-list of regexes. The whitepaper's allow-list
+  design is NOT implemented here.
+- The global queue does NOT enforce k-anonymous quorum thresholding. Skeletons
+  are appended directly.
+
 Requirements:
     pip install numpy
 """
 
-import time
 import copy
 import re
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
-import numpy as np
 
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # Helper: Lightweight Deterministic Embedder (No API Key Required)
 # ---------------------------------------------------------------------------
+
 CONCEPT_AXES = [
     "coding", "python", "bug", "travel", "flight",
-    "medical", "allergy", "deadline", "tax", "lunch"
+    "medical", "allergy", "deadline", "tax", "lunch",
 ]
 
+
 def embed_text(text: str) -> np.ndarray:
-    """Maps text to a normalized 1D vector across our concept dimensions."""
+    """Maps text to a normalized 1D vector across our concept dimensions.
+
+    Each concept present in the text sets its axis to 1.0. If no concept
+    is found, a small fallback weight on the first axis keeps the vector
+    non-zero so it can be normalized.
+    """
     vec = np.zeros(len(CONCEPT_AXES), dtype=np.float32)
     lower = text.lower()
     for i, word in enumerate(CONCEPT_AXES):
         if word in lower:
             vec[i] = 1.0
-    # Add tiny deterministic noise based on length so no vector is all zeros
     if np.linalg.norm(vec) == 0:
         vec[0] = 0.1
     return vec / np.linalg.norm(vec)
@@ -45,6 +61,7 @@ def embed_text(text: str) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Data Structures
 # ---------------------------------------------------------------------------
+
 @dataclass
 class RawMemory:
     id: str
@@ -54,7 +71,7 @@ class RawMemory:
     recency_score: float = 1.0    # 1.0 = brand new, decays over time
     importance: float = 0.5       # 0.0 to 1.0 (>= 0.9 triggers Permanent Invariant)
     urgency: float = 0.0          # 0.0 to 1.0
-    ttl_days: Optional[int] = None # Explicit time frame (Time-To-Live)
+    ttl_days: Optional[int] = None  # Explicit time frame (Time-To-Live)
     days_elapsed: int = 0
 
 
@@ -70,11 +87,13 @@ class CompressedMemory:
 # ---------------------------------------------------------------------------
 # Layer 6: Stateless Privacy Sanitizer
 # ---------------------------------------------------------------------------
+
 class StatelessPrivacySanitizer:
     """
     Runs in a memoryless sandbox. Strips private details into typed slots
     so the Global Matrix learns workflows without leaking personal data.
     """
+
     PRIVATE_PATTERNS = {
         r"peanut allergy|shellfish allergy": "[MEDICAL_HISTORY]",
         r"tokyo|london|bengaluru": "[LIFE_EVENT: LOCATION]",
@@ -85,7 +104,7 @@ class StatelessPrivacySanitizer:
     def sanitize(text: str) -> Tuple[str, Dict[str, str]]:
         """Returns (global_skeleton, private_bindings). Holds zero state."""
         skeleton = text
-        private_bindings = {}
+        private_bindings: Dict[str, str] = {}
         for pattern, slot_tag in StatelessPrivacySanitizer.PRIVATE_PATTERNS.items():
             match = re.search(pattern, skeleton, flags=re.IGNORECASE)
             if match:
@@ -97,7 +116,9 @@ class StatelessPrivacySanitizer:
 # ---------------------------------------------------------------------------
 # Core Memory Engine (Foreground + Background Sleep Consolidation)
 # ---------------------------------------------------------------------------
+
 class CognitiveMemoryAgent:
+
     def __init__(self, dim: int = len(CONCEPT_AXES)):
         self.dim = dim
 
@@ -118,7 +139,7 @@ class CognitiveMemoryAgent:
         # Layer 3: Sparse Relational Graph (adjacency list, not O(N^2) matrix)
         self.sparse_graph: Dict[str, List[Tuple[str, str]]] = {}
 
-        # Layer 6: Personal Private Bindings & Global Quorum Queue
+        # Layer 6: Personal Private Bindings & Global Queue (no quorum check yet)
         self.personal_bindings: Dict[str, str] = {}
         self.global_quorum_queue: List[str] = []
 
@@ -127,16 +148,17 @@ class CognitiveMemoryAgent:
         self.route_pattern = embed_text("coding python travel flight medical allergy")
 
     # --- Foreground Action: Fast Capture ---
-    def observe(self, mem: RawMemory):
+
+    def observe(self, mem: RawMemory) -> None:
         """Foreground agent logs raw memory instantly with zero compression lag."""
         self.episodic_scratchpad.append(mem)
         print(f"[Foreground] Captured raw memory {mem.id}: \"{mem.text}\"")
 
     # --- Layer 4: Dual-Gate Saliency & Forgetting Filter ---
+
     def _evaluate_saliency(self, mem: RawMemory) -> Tuple[str, str]:
-        """
-        Decides whether a raw memory is PROMOTED, EXPIRED, or FORGOTTEN.
-        """
+        """Decides whether a raw memory is PROMOTED, EXPIRED, or FORGOTTEN."""
+
         # Override: Silent Critical Constraint (Permanent Invariant)
         if mem.importance >= 0.9:
             return "PROMOTE_PERMANENT", "High importance bypass (Permanent Invariant)"
@@ -156,7 +178,8 @@ class CognitiveMemoryAgent:
         return "FORGET", f"Low saliency noise (habit={habit_score:.2f})"
 
     # --- Layer 5: Background Sleep-Time Consolidation ---
-    def run_sleep_cycle(self):
+
+    def run_sleep_cycle(self) -> None:
         """
         Offline sub-agent zips raw memories into 1D recipe vectors, prunes noise,
         sanitizes for global learning, and swaps matrices atomically.
@@ -174,8 +197,8 @@ class CognitiveMemoryAgent:
             print(f"  • Evaluating {mem.id} -> {decision} ({reason})")
 
             if decision.startswith("PROMOTE"):
-                # 1. "Memory Zip": Project raw vector onto Pattern Matrix to get 1D recipe
-                # Recipe weights = dot product against codebook rows, sparsified
+                # 1. "Memory Zip": project raw vector onto Pattern Matrix to get 1D recipe.
+                #    Weights = dot product against codebook rows, sparsified.
                 raw_weights = self.pattern_matrix @ mem.vector
                 sparse_recipe = np.where(raw_weights > 0.2, raw_weights, 0.0)
 
@@ -186,7 +209,7 @@ class CognitiveMemoryAgent:
                     self.global_quorum_queue.append(skeleton)
 
                 # 3. Store compressed 1D recipe
-                ttl_left = (mem.ttl_days - mem.days_elapsed) if mem.ttl_days else None
+                ttl_left = (mem.ttl_days - mem.days_elapsed) if mem.ttl_days is not None else None
                 compressed = CompressedMemory(
                     id=mem.id,
                     recipe_vector=sparse_recipe,
@@ -200,17 +223,17 @@ class CognitiveMemoryAgent:
                 top_pattern = self.pattern_labels[int(np.argmax(raw_weights))]
                 shadow_graph.setdefault(top_pattern, []).append((mem.id, "exemplifies"))
 
-            # One-Way Consolidation: Archive raw log to immutable cold storage
-            self.cold_storage.append(mem)
+        # One-Way Consolidation: archive every raw scratchpad entry to immutable cold storage
+        self.cold_storage.extend(self.episodic_scratchpad)
 
         # Atomic Shadow Swap
         self.recipe_store = shadow_recipes
         self.sparse_graph = shadow_graph
         self.episodic_scratchpad.clear()
-
         print("✨ [Sleep Sub-Agent] Shadow swap complete. Raw scratchpad archived to cold storage.\n")
 
     # --- Layer 5: Sub-Millisecond Semantic Router ---
+
     def retrieve(self, query: str) -> None:
         t0 = time.perf_counter()
         q_vec = embed_text(query)
@@ -220,8 +243,8 @@ class CognitiveMemoryAgent:
         score_pat = float(np.dot(q_vec, self.route_pattern))
         total = score_ep + score_pat + 1e-8
         conf_ep, conf_pat = score_ep / total, score_pat / total
-
         elapsed_ms = (time.perf_counter() - t0) * 1000
+
         print(f"🔍 [Router | {elapsed_ms:.3f} ms] Query: \"{query}\"")
 
         # Confidence-Threshold Fallback (>85% single store, else parallel)
@@ -241,8 +264,8 @@ class CognitiveMemoryAgent:
                 sim = float(np.dot(q_vec, reconstructed))
                 if sim > 0.3:
                     print(f"   ↳ [Pattern Hit | sim={sim:.2f}] {comp.id}: {comp.summary_tag}")
-                    if self.personal_bindings:
-                        print(f"     ↳ Private Bindings Available: {self.personal_bindings}")
+            if self.personal_bindings:
+                print(f"     ↳ Private Bindings Available: {self.personal_bindings}")
 
         if route in ("EPISODIC_SCRATCHPAD_ONLY", "PARALLEL_BOTH_STORES"):
             if not self.episodic_scratchpad:
@@ -251,37 +274,39 @@ class CognitiveMemoryAgent:
                 sim = float(np.dot(q_vec, mem.vector))
                 if sim > 0.3:
                     print(f"   ↳ [Episodic Hit | sim={sim:.2f}] {mem.id}: {mem.text}")
+
         print()
 
 
 # ---------------------------------------------------------------------------
 # Run the End-to-End Simulation
 # ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
     agent = CognitiveMemoryAgent()
 
     # 1. Foreground agent captures 4 very different real-world memories
     agent.observe(RawMemory(
         id="M1", text="I ate a sandwich for lunch today.",
-        vector=embed_text("lunch"), session_count=1, recency_score=0.5, importance=0.1
+        vector=embed_text("lunch"), session_count=1, recency_score=0.5, importance=0.1,
     ))
     agent.observe(RawMemory(
         id="M2", text="By the way, I have a severe peanut allergy.",
-        vector=embed_text("medical allergy"), session_count=1, recency_score=0.2, importance=0.98
+        vector=embed_text("medical allergy"), session_count=1, recency_score=0.2, importance=0.98,
     ))
     agent.observe(RawMemory(
         id="M3", text="Urgent: submit my tax filing by Friday.",
-        vector=embed_text("deadline tax"), session_count=1, urgency=0.95, ttl_days=3, days_elapsed=5
+        vector=embed_text("deadline tax"), session_count=1, urgency=0.95, ttl_days=3, days_elapsed=5,
     ))
     agent.observe(RawMemory(
         id="M4", text="Book aisle seats for my Tokyo flight.",
-        vector=embed_text("travel flight"), session_count=4, recency_score=0.9, importance=0.7
+        vector=embed_text("travel flight"), session_count=4, recency_score=0.9, importance=0.7,
     ))
 
     # 2. Trigger offline sleep consolidation
     agent.run_sleep_cycle()
 
-    # 3. Inspect what made it into the Global Quorum Queue (privacy check)
+    # 3. Inspect what made it into the Global Queue (privacy check)
     print("🌐 [Global Quorum Queue (Sanitized Skeletons)]:")
     for skel in agent.global_quorum_queue:
         print(f"   • {skel}")

@@ -1,192 +1,193 @@
 # Designing Human-Like Memory for AI Agents: From Stateless Models to Compressed, Privacy-Safe Sleep Consolidation
 
-## Abstract
-To a casual user, modern artificial intelligence feels like it remembers everything said earlier in a conversation. Under the hood, however, a Large Language Model (LLM) has no built-in memory at all—every time you send a message, the model wakes up with complete amnesia and re-reads the entire conversation from scratch. Current AI agents work around this limitation by storing past conversations as flat lists of numbers called **1D vectors**. While fast for simple lookups, flat vectors blur complex stories together, fail to track how facts connect to one another, and waste massive amounts of computing power as memories grow.
+> **Scope of this document.** This paper describes a design. The companion simulation (`sleep_memory_sim.py`) implements a subset of it. Each section marks what the prototype does and what remains proposed. Figures labeled *estimate* are not measured.
 
-This paper builds a complete, intuitive blueprint for next-generation AI agent memory from the ground up. Starting with how AI hardware actually reads numbers, we trace how stacking vectors into **2D matrices**, mapping relationships with **sparse graphs**, and compressing recurring habits using a **"Memory Zip" codebook** dramatically reduces storage while deepening reasoning. Finally, we introduce a **background "sleep" sub-agent** that reorganizes memories overnight—filtering out noise through time-aware forgetting rules, routing lookups in milliseconds, and separating private user details from shared global intelligence without leaking secrets.
+## Abstract
+To a casual user, modern artificial intelligence feels like it remembers everything said earlier in a conversation. Under the hood, however, a Large Language Model (LLM) has no built-in memory at all. Every time you send a message, the model re-reads the entire conversation from scratch. Current AI agents work around this by storing past conversations as flat lists of numbers called **1D vectors**. Flat vectors are fast for simple lookups, but they blur complex stories together, fail to track how facts connect, and grow costly as memories accumulate.
+
+This paper proposes a memory design built from the ground up. It stacks vectors into **2D matrices**, maps relationships with **sparse graphs**, and compresses recurring habits with a **"Memory Zip" codebook**. It adds a **background "sleep" sub-agent** that reorganizes memories offline, filters noise with time-aware forgetting rules, routes lookups quickly, and separates private user details from shared knowledge.
 
 ---
 
 ## 1. The Illusion of AI Memory: How Stateless Models Work
 
-If you ask an AI a question, get an answer, and ask a follow-up, it seems obvious that the AI remembered what you just said. In reality, **an AI model is completely stateless**. Once it finishes generating a reply, it immediately forgets you exist.
+If you ask an AI a question, get an answer, and ask a follow-up, it seems obvious that the AI remembered what you just said. In reality, **an AI model is stateless**. Once it finishes generating a reply, it retains nothing.
 
-The illusion of memory is created by the chat application wrapping the model, working together with four internal mechanisms:
+The illusion of memory is created by the chat application wrapping the model, working with four internal mechanisms:
 
-* **The Context Window (The Working Desk):** Every time you hit "Send," the software gathers the system instructions, every past message you sent, every reply the AI gave, and your brand-new message, and hands the entire bundle to the model all at once. Everything the model can see on its desk in that single moment is its **context window**.
-* **Tokens and Embeddings (Translating Words into Coordinates):** AI models cannot read letters; they only do math. The software chops your text into bite-sized pieces called **tokens** (words or parts of words) and converts each token into a list of numbers called an **embedding**. You can think of an embedding as GPS coordinates in a giant map of meaning—words like *"king"* and *"queen"* sit close together on that map, while *"banana"* sits miles away.
-* **Attention (Connecting the Dots):** Inside the model, a mechanism called **attention** scans across every token on the desk to figure out which earlier words matter right now. If your tenth message says *"Fix the bug in it,"* attention looks backward across the desk to connect *"it"* to *"the Python script"* from your first message.
-* **The KV Cache (Sticky Notes for Speed):** Re-reading a 50-page conversation from scratch for every single new word the AI types would be painfully slow. To avoid repeating math it already did, the server saves temporary intermediate calculations—called the **Key-Value (KV) Cache**—so it only has to process your newest words and attach them to the end.
+* **The Context Window (The Working Desk):** Every time you send a message, the software gathers the system instructions, past messages, past replies, and your new message, and hands the whole bundle to the model. Everything the model can see in that moment is its **context window**.
+* **Tokens and Embeddings (Translating Words into Coordinates):** The software splits text into **tokens** (words or parts of words) and converts each token into a list of numbers called an **embedding**. An embedding is a point in a high-dimensional map of meaning, so related words sit near each other.
+* **Attention (Connecting the Dots):** Inside the model, **attention** scores how much each earlier token matters for the current one. In a message such as *"Fix the bug in it,"* attention links *"it"* to *"the Python script"* mentioned earlier.
+* **The KV Cache (Saved Work for Speed):** To avoid recomputing past tokens for every new word, the server stores intermediate results called the **Key-Value (KV) Cache**, so only the newest tokens need processing.
 
-**The Bottleneck:** A working desk only holds so much paper. Once a conversation grows larger than the context window, older messages fall off the edge. To give an AI long-term memory across weeks or years, engineers have to build an external filing cabinet—and how that cabinet is organized changes everything.
+**The Bottleneck:** The context window has a fixed size. Once a conversation exceeds it, older messages drop out. Long-term memory across sessions therefore needs an external store, and how that store is organized matters.
 
 ---
 
 ## 2. Vectors vs. Matrices: Why Shape Matters to AI Hardware
 
-When an AI converts a sentence into coordinates, that single list of numbers is a **1D vector** (for example, a row of 1,024 numbers). If you save 10,000 past memories, you have a fundamental engineering choice: store them as **10,000 separate 1D vectors**, or stack them together into one solid spreadsheet grid called a **2D matrix**.
+A sentence converted into coordinates is a **1D vector**, for example a row of 1,024 numbers. If you save 10,000 past memories, you can store them as **10,000 separate 1D vectors**, or stack them into one **2D matrix** of shape $10{,}000 \times 1{,}024$. Both hold the same numbers.
 
-Even though 10,000 separate vectors and one $10,000 \times 1,024$ matrix hold the exact same amount of numbers, **modern AI chips (GPUs) are vastly faster and more efficient with matrices**.
+Modern GPUs process matrices more efficiently than many separate vectors, for two reasons:
 
-### Why Hardware Prefers Matrices
-1. **Books on One Shelf (Memory Locality):** Storing separate vectors scatters data across different locations in computer memory, forcing the processor to track thousands of individual addresses. Stacking them into a matrix places every number side-by-side in one continuous block. When the chip grabs one row, the next rows are already sitting right next to it in ultra-fast cache memory.
-2. **Bulk Math Over Single Trips (Arithmetic Intensity):** Comparing a question against one vector at a time is **memory-bound**—the chip's math calculators sit idle waiting for numbers to travel across wires. Packing vectors into a matrix lets the chip load one block of numbers and multiply it across thousands of targets simultaneously, maximizing **arithmetic intensity** (math done per byte moved).
+1. **Memory locality:** Stacking vectors into one block means the processor reads contiguous memory instead of scattered addresses. Neighboring rows tend to be loaded into cache together.
+2. **Arithmetic intensity:** Comparing one query against one vector at a time leaves the arithmetic units waiting on memory. A matrix lets one loaded block be multiplied against many targets at once, so more math is done per byte moved.
+
+These are general hardware properties. The prototype stores its pattern codebook as a NumPy matrix to use them, but it does not benchmark the speedup.
 
 ### Where AI Uses Each Structure Today
-Because AI has three distinct types of memory, it actually uses both shapes depending on the job:
 
 | Memory Layer | Real-World Analogy | Structure Used | How It Works |
 | :--- | :--- | :--- | :--- |
-| **Long-Term Knowledge** (Model Weights) | Everything you learned in school | **Massive 2D Matrices** | Facts and language rules are blended across giant grids of numbers during training. |
-| **Short-Term Memory** (Context / KV Cache) | What is currently on your desk | **Matrix Aligned with Vectors** | Each new word appends a row to a growing $N \times d$ matrix for exact, instant recall. |
-| **External Memory** (Vector Databases) | A searchable filing cabinet | **Standalone 1D Vectors** | Each past document or chat chunk is saved as its own separate vector and searched by distance. |
+| **Long-Term Knowledge** (Model Weights) | Everything you learned in school | **Large 2D matrices** | Facts and language patterns are encoded in weight matrices during training. |
+| **Short-Term Memory** (Context / KV Cache) | What is currently on your desk | **Matrix that grows by one row per token** | Each new token adds a row to a growing $N \times d$ matrix. |
+| **External Memory** (Vector Databases) | A searchable filing cabinet | **Standalone 1D vectors** | Each document or chat chunk is stored as its own vector and searched by distance. |
 
-*(Note: Newer experimental models called **State Space Models** try to avoid growing matrices by folding every new word into a fixed $d \times d$ square matrix. Memory stays tiny forever, though squashing everything into a fixed box blurs out exact word-for-word details.)*
+*(Note: **State Space Models** try to avoid growing matrices by folding each new token into a fixed $d \times d$ state. Memory stays constant in size, but exact word-for-word detail can be lost.)*
 
 ---
 
 ## 3. Beyond Flat Vectors: Sub-Matrices and Connection Maps
 
-Standard AI agents rely on that third row in the table above: they squash every past memory into a single 1D vector and drop it into a database. That creates two major flaws:
+Standard agents store each past memory as a single 1D vector in a database. This causes two problems:
 
-* **Semantic Averaging (The Smoothie Problem):** If a single memory contains multiple ideas—say, *"We tried PostgreSQL for the analytics app, it choked on heavy writes, so we switched to ClickHouse"*—forcing that whole story into one 1D vector blends all those details into an average smoothie. Later, searching specifically for *"why did we leave PostgreSQL?"* becomes fuzzy.
-* **Topological Blindness (Missing the "Why"):** A standard vector database only measures *similarity* (Memory A sounds like Memory B). It has no idea whether Memory A **caused** Memory B, **updated** it, or **contradicted** it.
+* **Semantic Averaging:** A memory that contains several ideas, such as *"We tried PostgreSQL for the analytics app, it choked on heavy writes, so we switched to ClickHouse,"* is compressed into one vector that averages those ideas. A later search for *"why did we leave PostgreSQL?"* becomes fuzzy.
+* **Topological Blindness:** A vector database measures similarity only. It cannot tell whether Memory A **caused**, **updated**, or **contradicted** Memory B.
 
-### The Upgrade: 2D Sub-Matrices + A Connection Matrix
-To fix both flaws, each memory can be upgraded from a flat 1D line into a small **2D sub-matrix** ($\mathbf{M}_i$), where different rows represent different angles, actors, or steps of that single event. Alongside those memory grids, the agent maintains a second grid—a **connection matrix** (known in math as an *adjacency matrix*)—that records how Memory A links to Memory B.
+### The Proposed Upgrade: 2D Sub-Matrices + A Connection Structure
+Each memory could be a small **2D sub-matrix** ($\mathbf{M}_i$), with rows for different angles, actors, or steps of one event. A separate **connection structure** would record links between memories. Written as a dense matrix, this is an *adjacency matrix*.
+
+*Prototype status:* The simulation stores one recipe vector per memory and no sub-matrices. Its graph is a sparse adjacency list with one link type, `exemplifies`. Causal (`causes`, `updates`, `contradicts`) links are not implemented.
 
 ### Solving the $N^2$ Explosion with Sparse Graphs
-There is one dangerous catch with a connection matrix: **quadratic growth ($O(N^2)$)**. If an agent stores 10 memories, a connection grid is $10 \times 10 = 100$ squares. If it stores **1,000,000 memories**, a full connection grid balloons to $1,000,000 \times 1,000,000 =$ **1 trillion squares**—crashing any server.
+A dense connection matrix grows quadratically, $O(N^2)$. At 10 memories it has $10 \times 10 = 100$ cells. At 1,000,000 memories it would have $10^{12}$ cells, which is too large to hold in memory on ordinary hardware.
 
-Fortunately, almost all of those trillion squares are empty zeros because most memories are not directly connected to each other. Instead of saving a giant grid of empty zeros, engineers store only the real connections in a **sparse graph**—cutting memory cost down to only the links that actually exist. When the agent needs to spot big-picture patterns across those links, a mathematical tool called **Singular Value Decomposition (SVD)** compresses the connection map into two skinny matrices and a single 1D importance list, filtering out weak links automatically.
+Most cells would be zero, because most memories are not directly linked. A **sparse graph** stores only the links that exist, so storage scales with the number of links.
+
+**Singular Value Decomposition (SVD)** could compress a connection map into smaller factors to surface dominant patterns. This is *proposed only*; the prototype does not use SVD.
 
 ---
 
 ## 4. "Memory Zip": Compressing Experience with Codebooks and Recipe Vectors
 
-Even with sparse graphs, saving full 2D grids for millions of memories eventually gets heavy. How do computers shrink massive files on your laptop? They **zip** them: a zip program scans a file for repeating patterns, saves each pattern **once** in a dictionary, and replaces every repeat with a tiny shorthand pointer.
+Compression tools such as zip save each repeated pattern once and replace repeats with short references. The same idea can apply to agent memory:
 
-We can apply that exact same compression trick to AI memory by combining a **2D matrix** with **1D vectors**:
-
-1. **The Pattern Matrix (The Shared Codebook):** Instead of saving similar experiences from scratch over and over, the AI extracts recurring templates—such as how you like emails formatted, standard debugging steps, or recurring project workflows—and stores each canonical pattern **once** as a row in a master **Pattern Matrix** ($\mathbf{C}$).
-2. **1D Recipe Vectors (Lightweight Pointers):** Whenever a new experience happens, the agent doesn't save the whole grid. It saves a tiny **1D recipe vector** ($\mathbf{w}_i$) that acts like a shorthand formula pointing back to the Pattern Matrix:
+1. **The Pattern Matrix (Shared Codebook):** Recurring templates, such as a preferred email format or a standard debugging routine, are stored once as rows of a **Pattern Matrix** ($\mathbf{C}$).
+2. **1D Recipe Vectors (Lightweight Pointers):** Each memory is stored as a sparse 1D vector of weights over the codebook rows:
 
    $$
    \text{Memory}_i \approx 0.8 \times [\text{Pattern } 12] + 0.3 \times [\text{Pattern } 47]
    $$
 
-   Because a 1D recipe vector is mostly zeros and references existing rows in the matrix, storage shrinks by **90% to 95%**, and searching becomes blazingly fast.
+   Because most weights are zero, a recipe takes less space than a full copy of the memory. The storage saving depends on how many rows each memory references and how sparse its recipe is. The prototype does not measure it. **Any specific percentage would be an estimate, not a result.**
+
+*Prototype status:* The codebook is three hand-written patterns (coding, travel, health), not patterns extracted from data. Recipe weights are the dot products of each memory's vector with the codebook, zeroed below 0.2.
 
 ### The "JPEG Blur" Catch and the Brain's Solution
-Zipping memories through a shared Pattern Matrix is **lossy compression**—much like saving a photo as a JPEG. It is brilliant at capturing the general picture and recognizing familiar routines, but it blurs out rare, one-off details (like a random Wi-Fi password, a confirmation code, or an unusual exception that does not match any pattern).
+Storing memories as weights over a shared codebook is **lossy**, like saving a photo as a JPEG. It captures common routines well but blurs rare, one-off details such as a Wi-Fi password, a confirmation code, or an unusual exception.
 
-Human brains face this exact same trade-off and solve it by splitting memory into two regions: the **hippocampus** (which captures raw, exact recent events) and the **neocortex** (which slowly extracts compressed general knowledge). Our agent copies this biology directly:
-* **The Episodic Scratchpad:** A small, **uncompressed** fast buffer that keeps recent interactions verbatim so exact numbers and rare facts are never blurred.
-* **The Zipped Pattern Matrix:** A massive, **compressed** long-term store for habits, skills, and general knowledge.
+The brain handles this trade-off with two systems: the **hippocampus** records recent events in detail, and the **neocortex** gradually extracts general knowledge. The design mirrors that split:
+* **The Episodic Scratchpad:** A small, **uncompressed** buffer that keeps recent interactions verbatim.
+* **The Zipped Pattern Matrix:** A **compressed** long-term store for habits and general knowledge.
 
 ---
 
 ## 5. Sleep-Time Consolidation: The Background Sub-Agent
 
-Discovering recurring patterns, updating the Pattern Matrix, and untangling connections requires heavy math. If the AI tries to compress memories in the middle of a live chat, the user experiences frustrating lag.
+Extracting patterns, updating the codebook, and resolving conflicts takes real computation. Running it during a live chat would add visible lag, so the design separates two workers:
 
-To keep live conversations instant, we split the AI into two workers—mirroring the human wake/sleep cycle:
+* **The Foreground Actor Agent:** Handles the conversation. It reads the existing codebook and appends raw notes to the Episodic Scratchpad without organizing them.
+* **The Background Consolidator Sub-Agent:** Runs during idle "sleep" cycles. It reviews the raw scratchpad, promotes or drops candidates, sanitizes them, compresses promoted memories into recipe vectors, and archives the raw log.
 
-* **The Foreground Actor Agent:** Stays awake with the user. It focuses 100% on fast conversation, reading from the existing Pattern Matrix and jotting raw notes onto the Episodic Scratchpad without pausing to organize them.
-* **The Background Consolidator Sub-Agent:** Wakes up during offline **"sleep" cycles** when the user is idle. It reviews the day's raw scratchpad, spots new habits across multiple conversations, merges duplicate facts, resolves contradictions (e.g., updating your address when you move), and zips the refined knowledge into the Pattern Matrix.
+*Prototype status:* The simulation runs one sleep cycle when called. It does not detect idle time or run in parallel with the foreground agent. Contradiction resolution (for example, updating an address) is not implemented.
 
-### Three Real-World Bugs—and How to Fix Them
-Running a background organizer while a foreground agent is active introduces three classic engineering traps:
+### Failure Modes and Proposed Fixes
+Running a background process alongside a live agent creates these risks:
 
-| Failure Mode | What Goes Wrong in Practice | The Engineering Fix |
+| Failure Mode | What Goes Wrong in Practice | Proposed Fix |
 | :--- | :--- | :--- |
-| **Pointer Corruption (Race Condition)** | If the sleep sub-agent rearranges rows in the Pattern Matrix while the foreground agent is mid-sentence, existing 1D recipe vectors (`0.8 × Pattern #12`) suddenly point to the wrong row. | **Shadow Swapping (Copy-on-Write):** The sub-agent builds `Pattern_Matrix_v2` silently off to the side. Only when completely finished does it flip a single read pointer atomically. |
-| **The "Insomniac" Agent** | A 24/7 customer support bot never goes offline, meaning the raw scratchpad never gets a sleep window and eventually overflows. | **Hybrid Watermark Triggers:** Trigger sleep consolidation on *whichever comes first*: 10 minutes of user inactivity **or** the raw scratchpad hitting a size cap (e.g., 50 raw entries). |
-| **Multi-Night "JPEG Drift"** | If the sub-agent repeatedly re-zips already compressed memories night after night, tiny rounding errors compound until facts hallucinate or blur together. | **One-Way Idempotent Compression:** Never re-compress zipped patterns. Compress raw scratchpad entries *once*, then move the original raw logs into cheap, immutable cold storage for auditing. |
+| **Pointer Corruption (Race Condition)** | If the sub-agent rewrites codebook rows while the foreground agent is reading, existing recipe vectors can point to the wrong rows. | **Copy-on-Write Shadow Swapping:** Build the new codebook off to the side and switch the read pointer in one step. *The prototype does this by deep-copying the recipe store and graph, then replacing them in a single assignment. It does not swap a live codebook.* |
+| **The "Insomniac" Agent** | A 24/7 bot may never go idle, so the scratchpad keeps growing. | **Watermark Triggers:** Run consolidation on whichever comes first, an idle timeout or a scratchpad size cap. *Proposed only; the prototype has no triggers.* |
+| **Multi-Night "JPEG Drift"** | Re-compressing already compressed memories repeatedly compounds rounding error. | **One-Way Compression:** Compress each raw entry once, then archive the raw log. *The prototype compresses each entry once and writes all raw entries to cold storage.* |
 
 ---
 
 ## 6. The Art of Forgetting: Dual-Gate Saliency and Time-Bounded Urgency
 
-If the sleep sub-agent zips *everything* from the scratchpad into the Pattern Matrix, the codebook will eventually clog with useless clutter—like what the user ate for lunch four months ago. Intelligent memory requires knowing what to **forget**.
+Without forgetting, the codebook fills with clutter, such as what the user ate for lunch months ago. During each sleep cycle, every candidate passes through a **Dual-Gate Saliency Filter**.
 
-During each sleep cycle, every candidate memory must pass through a **Dual-Gate Saliency Filter**:
+### Gate 1: Session Frequency + Recency (Habit and Decay)
+* **Why both:** Frequency alone keeps abandoned habits alive forever. Recency alone lets a single recent mention look important. The combined score favors patterns that are both repeated and recent.
+* **Anti-spam:** Frequency is counted across **distinct sessions or days**, not raw mentions. Fifteen mentions of a bug in one 10-minute session count as one session.
 
-### Gate 1: Session Frequency + Recency (The Habit & Decay Gate)
-* **Why both are needed:** Tracking *frequency* alone keeps dead habits alive forever (a tool you used daily three years ago). Tracking *recency* alone lets random noise from ten minutes ago pollute long-term memory. Combining them rewards patterns that are **both repeated and still active**, while letting abandoned habits fade naturally.
-* **Anti-Spam Protection (Session Counting):** If a user mentions a minor bug 15 times during one 10-minute troubleshooting chat and never mentions it again, raw word count would falsely flag it as a lifelong habit. Instead, frequency is measured by **distinct sessions/days** in which the topic appeared.
+The prototype computes `habit_score = 0.4 × session_count + 0.6 × recency_score` and promotes memories at 1.2 or more. The caller supplies `session_count` and `recency_score`; the prototype does not compute them from timestamps.
 
-### Gate 2: Importance + Urgency + Explicit Time Frame (The TTL Gate)
-Tasks with deadlines cannot wait weeks to build up frequency—they need immediate promotion, *and* an automatic expiration date.
-* **The Zombie Task Bug:** If you tell an AI *"Urgent: submit my tax filing by Friday,"* an AI without clock awareness marks it "High Urgency" and keeps reminding you about it six months later.
-* **Time-To-Live (TTL) Binding:** Pairing **Importance + Urgency** with the **Time Frame** mentioned in the text attaches an expiration timestamp. The sleep sub-agent promotes the task immediately until the deadline passes, then automatically archives it on the very next sleep cycle after expiration.
+### Gate 2: Importance + Urgency + Time Frame (TTL)
+* **Deadlines should not wait** to build frequency. A task with a deadline is promoted immediately.
+* **TTL binding:** A deadline attaches an expiration. Once it passes, the memory is expired.
+
+*Prototype status:* A memory with a TTL is promoted while urgency is at least 0.7 and expired after the TTL. Expired and forgotten memories are not compressed into recipe vectors, but their raw entries are still written to cold storage with all other scratchpad entries.
 
 ### The "Silent Critical Constraint" Override
-What if a user mentions a life-or-death fact once, casually, with no deadline—such as *"By the way, I have a severe peanut allergy"*? Frequency is 1, recency drops over time, urgency is zero, and there is no time frame. Under standard decay, the agent would forget it and eventually recommend peanut noodles. To prevent this, memories crossing a high **Importance** threshold bypass decay entirely as **Permanent Invariants**.
+A life-critical fact, such as *"I have a severe peanut allergy,"* may be mentioned once with no deadline. Its score is low, so it would otherwise be forgotten. Memories with importance at or above 0.9 bypass decay as **Permanent Invariants**. The prototype implements this threshold.
 
 ---
 
-## 7. Smart Retrieval Routing: Looking in the Right Place Fast
+## 7. Retrieval Routing: Looking in the Right Place Fast
 
-Now that the agent has two distinct memory stores—the **Raw Episodic Scratchpad** (exact recent facts) and the **Zipped Pattern Matrix** (compressed long-term habits)—searching *both* stores on every single message would waste time and compute.
+With two stores, the Episodic Scratchpad and the Pattern Matrix, searching both on every query wastes work. A router decides where to look.
 
-Instead, incoming questions pass through a two-stage triage router:
+1. **Store-Level Routing:** Recent, detail-oriented questions go to the Episodic Scratchpad. Conceptual or preference questions go to the Pattern Matrix.
+2. **Partition Pre-Filtering (proposed):** Patterns could be grouped into topic clusters so the router searches only the matching cluster. *Not implemented in the prototype.*
 
-1. **Store-Level Routing:** The router inspects the intent of the user's question. Detail-oriented, recent questions (*"What was that error code from ten minutes ago?"*) go straight to the **Episodic Scratchpad**. Conceptual or preference questions (*"How do I usually structure my Python APIs?"*) go straight to the **Pattern Matrix**.
-2. **Partition Pre-Filtering:** Inside the Pattern Matrix, the router does not scan every row. Because patterns are already grouped into topic clusters, it compares the question against high-level category headers first and searches **only inside the matching neighborhood**.
-
-### Keeping the Router Fast and Safe
-* **Sub-Millisecond Embedding Router:** Asking a full-sized LLM to "classify where to search" takes 300–800 milliseconds—longer than just searching everything blindly. Instead, routing uses a tiny mathematical dot product comparing the question's vector against a few pre-computed route vectors, finishing in **less than 2 milliseconds**.
-* **Confidence-Threshold Parallel Fallback:** Sometimes a user asks a hybrid question: *"Use my usual coding style (Pattern Matrix) to fix the API bug from ten minutes ago (Episodic Scratchpad)."* If the router's confidence for a single store is **less than 85%**, it automatically fires a **parallel lookup** across both stores at the same time and merges the results.
+### Router Speed and Fallback
+* **Dot-product router:** The prototype compares the query vector against two precomputed route vectors. It does this with a single dot product and no LLM call, so the decision is cheap. On the development machine the router took roughly 0.01–0.1 ms per query. This is a single measurement, not a benchmark.
+* **Parallel fallback:** If neither store reaches 85% confidence, the router searches both and merges results. The prototype does this, and the example output shows it. The confidence is computed as the share of each route's score in the total, so it measures relative routing preference, not retrieval accuracy.
 
 ---
 
-## 8. Scaling to Millions of Users: Stateless Privacy Isolation
+## 8. Scaling to Many Users: Privacy Isolation
 
-Suppose we deploy this architecture across 100,000 different users. Ideally, every user shouldn't have to teach their agent basic common sense from scratch. We want **one giant Global Pattern Matrix** shared by everyone (holding universal coding skills, workflows, and general knowledge) paired with a tiny **Personal Pattern Matrix** private to each individual user.
+Users should not each have to teach their agent basic skills. A design could keep one **Global Pattern Matrix** shared by all users and a **Personal Pattern Matrix** per user. The risk is that private facts reach the global store.
 
-The danger is obvious: if everyone's sleep sub-agents feed new patterns up into the Global Matrix, one user's medical diagnosis, password, or private life event could leak into another user's AI.
+### Sanitization and Typed Slots
+Before a candidate reaches the global store, a **Sanitizer** replaces personal details with typed slots such as `[MEDICAL_HISTORY]`, `[LIFE_EVENT]`, or `[FINANCIAL_RECORD]`:
 
-### Stateless Sanitization + Typed-Slot Abstraction
-During sleep consolidation, any memory candidate bound for the Global Matrix must pass through a **Stateless Sanitizer Sub-Agent**:
+* **Global store (skeleton):** *"When `[LIFE_EVENT: relocation]` occurs alongside `[MEDICAL_HISTORY]`, prioritize local healthcare transfer checklists."*
+* **Personal store (bindings):** `[LIFE_EVENT] = "moving to Bengaluru"`, `[MEDICAL_HISTORY] = "shellfish allergy"`.
 
-1. **Zero Memory by Design:** The sanitizer runs in a locked, memoryless sandbox. It inspects a batch of patterns, strips sensitive details, and is wiped completely clean after every run—meaning hackers can never compromise it as a central data vault.
-2. **Typed-Slot Replacement:** Rather than deleting private facts (which destroys the logic of a story), the sanitizer replaces personal details with structural category tags such as `[MEDICAL_HISTORY]`, `[LIFE_EVENT]`, or `[FINANCIAL_RECORD]`:
-   * **Global Pattern Matrix stores the skeleton:** *"When `[LIFE_EVENT: relocation]` occurs alongside `[MEDICAL_HISTORY]`, prioritize local healthcare transfer checklists."*
-   * **Personal Pattern Matrix stores the private bindings:** `[LIFE_EVENT] = "moving to Bengaluru"`, `[MEDICAL_HISTORY] = "shellfish allergy"`.
+The prototype's sanitizer is a **block-list of regular expressions** covering three example categories (medical allergies, a few cities, a tax filing). It holds no state between calls. This is a demonstration only. A real deployment would need a far broader detector.
 
-When the user chats live, their foreground agent snaps their private bindings into the shared global skeleton—delivering deeply personalized help while keeping personal data strictly locked on the user's side.
-
-### Patching Two Sneaky Privacy Leaks
-* **Defeating the Mosaic (Fingerprint) Attack:** Even with names removed, combining four specific tags—like `[ROLE: pediatric surgeon]` + `[LIFE_EVENT: adopted twins]` + `[MEDICAL_HISTORY: left-hand tremor]`—uniquely identifies one person on Earth. To prevent fingerprint leaks, the Global Matrix enforces **Quorum Thresholding ($k$-anonymity)**: a new skeleton pattern is only promoted to the global codebook if at least **50 unrelated users** independently generate that exact same abstracted template during their sleep cycles.
-* **Allow-List Inversion for Company Secrets:** A filter trained to spot personal categories (`medical`, `family`) will not recognize unreleased company product codenames or proprietary source code. Instead of a *block-list* ("strip known sensitive words, share the rest"), the sanitizer uses an **allow-list** ("keep everything private by default; share only patterns matching verified, generic structural templates").
+### Proposed Protections Beyond the Prototype
+* **Mosaic (fingerprint) attacks:** Several individually generic tags together can identify one person. A proposed defense is **quorum thresholding** (k-anonymity): promote a skeleton only after at least $k$ distinct users produce the same one, with $k = 50$ as an example value. *Not implemented. The prototype appends sanitized skeletons directly to a queue.*
+* **Company secrets:** A block-list cannot catch unknown codenames or proprietary code. The proposed alternative is an **allow-list**: keep everything private by default and share only patterns that match verified, generic templates. *Not implemented. The prototype uses a block-list.*
 
 ---
 
 ## 9. Putting It All Together: Life of a Memory
 
-To see how all six layers cooperate seamlessly, trace a single interaction from live conversation to overnight sleep and next-day recall:
+Here is how the design would handle one interaction, using the prototype's behavior where it exists:
 
-1. **Live Conversation (Millisecond Scale):** You tell the agent, *"Remind me to renew my passport before my Tokyo flight next month, and remember I prefer aisle seats."* The **Foreground Agent** responds immediately while jotting the raw message onto the **Episodic Scratchpad**.
-2. **Overnight Sleep Cycle (Async Background):** While you are asleep, the **Sleep Sub-Agent** wakes up. Using the **Dual-Gate Saliency Filter**, it sees *"renew passport before next month"* has high Urgency + an explicit Time Frame, pinning it with a 30-day expiration timer. It sees *"prefer aisle seats"* has high Importance with no deadline, marking it a permanent travel preference.
-3. **Compression & Privacy Split:** The sub-agent zips your travel habit into a tiny **1D recipe vector** pointing to your **Personal Pattern Matrix** (`[TRAVEL_PREF] = "aisle seat"`), while the **Stateless Sanitizer** strips your destination and sends only the generic workflow skeleton (`[TASK: document_renewal]` before `[LIFE_EVENT: international_travel]`) into the **Global Quorum Queue**. Finally, it swaps in the updated matrix atomically via **Shadow Swapping** and archives your raw chat log into cold storage.
-4. **Next-Day Recall:** Two weeks later, you ask, *"Book me a flight to London."* The **Sub-Millisecond Router** detects a general preference query, checks your **Personal Pattern Matrix** first, snaps *"aisle seat"* into the global booking workflow, and checks your active deadline alerts to verify whether your passport renewal is still pending.
+1. **Live conversation:** You say, *"Remind me to renew my passport before my Tokyo flight next month, and remember I prefer aisle seats."* The foreground agent answers and appends the raw message to the Episodic Scratchpad.
+2. **Sleep cycle:** The sub-agent evaluates each candidate. A deadline with urgency gets a TTL. A preference with high importance becomes a permanent invariant. *The prototype's example handles deadlines and importance this way.*
+3. **Compression and privacy split:** Promoted memories become recipe vectors. The sanitizer replaces private details with typed slots before anything is queued for the global store. The raw log is archived.
+4. **Later recall:** A later query such as *"Book me a flight to London"* routes to the codebook, and private bindings are looked up for the user. *The prototype shows the routing and binding lookup. Cross-checking active deadlines is not implemented.*
 
 ### Architectural Comparison
 
-| Feature | Standard AI Chat (Context Only) | Flat 1D Vector Database (Standard RAG) | Six-Layer Sleep-Consolidated Matrix Architecture |
+| Feature | Standard AI Chat (Context Only) | Flat 1D Vector Database (Standard RAG) | Proposed Sleep-Consolidated Matrix Design |
 | :--- | :--- | :--- | :--- |
-| **Memory Lifespan** | Forgets as soon as chat window fills | Long-term, but grows cluttered forever | Long-term with automatic decay & deadline expiration |
-| **Detail vs. Big Picture** | Exact recall until window overflows | Blurs multi-step stories into one average | Combines exact **Episodic Scratchpad** + compressed **Pattern Matrix** |
-| **Understanding Connections** | Only within the active chat window | Measures similarity, blind to cause/effect | Maps causal & temporal links via **Sparse Graphs** |
-| **Speed & Storage Cost** | Slow & expensive on long chats | Linear storage growth ($O(N)$) | **90–95% smaller** via **1D Recipe Vectors** + `<2 ms` routing |
-| **Contradiction Cleanup** | Manual or non-existent | Old and new facts clash during search | Resolved off-clock by **Background Sleep Sub-Agent** |
-| **Multi-User Privacy** | Isolated per session | Separate silos (no shared learning) | **Stateless Typed-Slot Sanitization** + $k$-anonymous global learning |
+| **Memory Lifespan** | Lost when the context window fills | Persists, but accumulates clutter | Persists, with decay and deadline expiration (prototype: yes) |
+| **Detail vs. Big Picture** | Exact recall until the window overflows | Blurs multi-step stories into one average | Keeps an exact scratchpad and a compressed codebook (prototype: yes) |
+| **Understanding Connections** | Only within the active window | Measures similarity only | Sparse links (prototype: one link type only) |
+| **Storage Cost** | Grows with conversation length | Grows linearly with memory count | Recipe vectors may reduce storage; *not measured* |
+| **Contradiction Cleanup** | Manual or absent | Old and new facts can conflict at search time | Proposed; not implemented |
+| **Multi-User Privacy** | Isolated per session | Separate stores, no shared learning | Block-list sanitization in prototype; allow-list and quorum proposed |
 
-By shifting from static, flat storage to a dynamic system that separates fast waking action from slow, compressed offline reflection, AI agents move closer to how biological minds actually learn—retaining exact details when precision matters, distilling wisdom from repetition, letting irrelevant noise fade away, and protecting private identity while learning from the wider world.
+The design aims to separate fast interaction from slower offline consolidation, keep exact details when they matter, compress repeated patterns, let irrelevant information fade, and protect private information while still learning from many users. The simulation demonstrates the core loop. The remaining pieces are proposals for future work.
 
 ---
 
 ## Acknowledgments
 
-This architecture was designed from first principles and refined through an interactive engineering and stress-testing collaboration with **Gemini (Google)**, which contributed to formalizing the six-layer model, identifying production failure modes, authoring this whitepaper, and implementing the reference simulation (`sleep_memory_sim.py`).
+This architecture was designed from first principles and refined through an interactive engineering and stress-testing collaboration with **Gemini (Google)**, which contributed to formalizing the six-layer model, identifying production failure modes, drafting this whitepaper, and implementing the reference simulation (`sleep_memory_sim.py`).
